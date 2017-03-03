@@ -1,0 +1,83 @@
+-- This file has been generated from package.yaml by hpack version 0.15.0.
+--
+-- see: https://github.com/sol/hpack
+
+name:           multi-git-sync
+version:        0.1.0
+synopsis:       Sidecar to keep multiple git repositories in sync
+description:    Please see README.md
+category:       Web
+homepage:       https://github.com/jml/multi-git-sync#readme
+bug-reports:    https://github.com/jml/multi-git-sync/issues
+maintainer:     Jonathan M. Lange <jml@mumak.net>
+license:        Apache
+license-file:   LICENSE
+build-type:     Simple
+cabal-version:  >= 1.10
+
+source-repository head
+  type: git
+  location: https://github.com/jml/multi-git-sync
+
+library
+  hs-source-dirs:
+      src
+  default-extensions: NoImplicitPrelude OverloadedStrings RecordWildCards
+  ghc-options: -Wall -Werror
+  build-depends:
+      base >= 4.9 && < 5
+    , protolude
+    , aeson
+    , bytestring
+    , exceptions
+    , http-media
+    , http-types
+    , logging-effect
+    , mtl
+    , neat-interpolation
+    , optparse-applicative
+    , prometheus-client
+    , prometheus-metrics-ghc
+    , servant
+    , servant-server
+    , time
+    , wai
+    , wai-extra
+    , wai-middleware-prometheus
+    , warp
+    , wl-pprint-text
+  exposed-modules:
+      MultiGitSync
+      MultiGitSync.Server.Instrument
+      MultiGitSync.Server.Logging
+  default-language: Haskell2010
+
+executable multi-git-sync
+  main-is: Main.hs
+  hs-source-dirs:
+      cmd
+  default-extensions: NoImplicitPrelude OverloadedStrings RecordWildCards
+  ghc-options: -Wall -Werror
+  build-depends:
+      base >= 4.9 && < 5
+    , protolude
+    , multi-git-sync
+  default-language: Haskell2010
+
+test-suite multi-git-sync-server-tests
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  hs-source-dirs:
+      tests
+  default-extensions: NoImplicitPrelude OverloadedStrings RecordWildCards
+  ghc-options: -Wall -Werror
+  build-depends:
+      base >= 4.9 && < 5
+    , protolude
+    , multi-git-sync
+    , logging-effect
+    , QuickCheck
+    , servant-quickcheck
+    , tasty
+    , tasty-hspec
+  default-language: Haskell2010

@@ -1,0 +1,60 @@
+name: multi-git-sync
+version: 0.1.0
+synopsis: Sidecar to keep multiple git repositories in sync
+description: Please see README.md
+maintainer: Jonathan M. Lange <jml@mumak.net>
+license: Apache
+github: jml/multi-git-sync
+category: Web
+
+ghc-options: -Wall -Werror
+default-extensions:
+  - NoImplicitPrelude
+  - OverloadedStrings
+  - RecordWildCards
+
+dependencies:
+  - base >= 4.9 && < 5
+  - protolude
+
+library:
+  source-dirs: src
+  dependencies:
+    - aeson
+    - bytestring
+    - exceptions
+    - http-media
+    - http-types
+    - logging-effect
+    - mtl
+    - neat-interpolation
+    - optparse-applicative
+    - prometheus-client
+    - prometheus-metrics-ghc
+    - servant
+    - servant-server
+    - time
+    - wai
+    - wai-extra
+    - wai-middleware-prometheus
+    - warp
+    - wl-pprint-text
+
+executables:
+  multi-git-sync:
+    main: Main.hs
+    source-dirs: cmd
+    dependencies:
+      - multi-git-sync
+
+tests:
+  multi-git-sync-server-tests:
+    main: Main.hs
+    source-dirs: tests
+    dependencies:
+      - multi-git-sync
+      - logging-effect
+      - QuickCheck
+      - servant-quickcheck
+      - tasty
+      - tasty-hspec
