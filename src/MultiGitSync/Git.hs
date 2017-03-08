@@ -19,19 +19,18 @@ import System.Posix.Files
   )
 import System.Process (CmdSpec(..), CreateProcess(..), proc, readCreateProcessWithExitCode, showCommandForUser)
 
--- | Information about a Git repository to sync, and where to sync it
-data GitConfig
-  = GitConfig GitUrl FilePath
-  deriving (Eq, Ord, Show)
-
 -- | The URL to a Git repository.
-type GitUrl = Text
+newtype GitUrl = GitUrl Text deriving (Eq, Ord, Show)
 
 -- | A Git branch.
-type GitBranch = Text
+newtype Branch = Branch Text deriving (Eq, Ord, Show)
 
-type RevSpec = Text
-type Hash = Text
+-- | A revision. Can be specified in innumerable ways, e.g. 'HEAD', 'ab2c3a',
+-- 'HEAD^', etc.
+newtype RevSpec = RevSpec Text
+
+-- | A SHA-1 hash for a Git revision.
+newtype Hash = Hash Text deriving (Eq, Ord, Show)
 
 -- XXX: Not sure this is a good idea. Maybe use exceptions all the way
 -- through?
@@ -42,21 +41,17 @@ data GitError
   deriving (Eq, Show)
 
 
-syncRepo :: HasCallStack => GitUrl -> GitBranch -> RevSpec -> Maybe Natural -> FilePath -> FilePath -> ExceptT GitError IO ()
+syncRepo :: HasCallStack => GitUrl -> Branch -> RevSpec -> Maybe Natural -> FilePath -> FilePath -> ExceptT GitError IO ()
 syncRepo url branch rev depth repoPath workingTreePath = do
   changed <- ensureRepo
-  case changed of
-    Nothing -> pure ()
-    Just hash -> do
-      let canonicalTree = repoPath </> ("rev-" <> toS hash)
-      addWorkTree repoPath canonicalTree branch
-      resetWorkTree canonicalTree hash
-      oldTree <- liftIO $ swapSymlink workingTreePath canonicalTree
-      case oldTree of
-        Nothing -> pure ()
-        Just path -> do
-          liftIO $ removeDirectoryRecursive path
-          void $ runGitInRepo repoPath ["worktree", "prune"]
+  for_ changed $ \hash@(Hash hashText) -> do
+    let canonicalTree = repoPath </> ("rev-" <> toS hashText)
+    addWorkTree repoPath canonicalTree branch
+    resetWorkTree canonicalTree hash
+    oldTree <- liftIO $ swapSymlink workingTreePath canonicalTree
+    for_ oldTree $ \path -> do
+      liftIO $ removeDirectoryRecursive path
+      runGitInRepo repoPath ["worktree", "prune"]
 
   where
     ensureRepo = do
@@ -64,11 +59,8 @@ syncRepo url branch rev depth repoPath workingTreePath = do
       if repoExists
         then do
           remote <- needsUpdate repoPath branch rev
-          case remote of
-            Nothing -> pure Nothing
-            Just hash -> do
-              void $ fetchRepo repoPath
-              pure (Just hash)
+          when (isJust remote) (void $ fetchRepo repoPath)
+          pure remote
         else do
           repoPath' <- cloneRepo url branch depth repoPath
           Just <$> hashForRev repoPath' rev
@@ -76,9 +68,9 @@ syncRepo url branch rev depth repoPath workingTreePath = do
 
 -- | Clone a Git repository.
 cloneRepo :: (HasCallStack, MonadError GitError m, MonadIO m)
-          => GitUrl -> GitBranch -> Maybe Natural -> FilePath
+          => GitUrl -> Branch -> Maybe Natural -> FilePath
           -> m FilePath
-cloneRepo url branch depth gitRoot = do
+cloneRepo (GitUrl url) (Branch branch) depth gitRoot = do
   let args = ["clone", "--mirror", "-b", branch]
              <> case depth of
                   Nothing -> []
@@ -94,7 +86,7 @@ fetchRepo :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> m (
 fetchRepo repoPath = void $ runGitInRepo repoPath ["fetch", "--all", "--prune"]
 
 -- | Do we need to update repo?
-needsUpdate :: (HasCallStack, MonadError GitError m, MonadIO m) => FilePath -> GitBranch -> RevSpec -> m (Maybe Hash)
+needsUpdate :: (HasCallStack, MonadError GitError m, MonadIO m) => FilePath -> Branch -> RevSpec -> m (Maybe Hash)
 needsUpdate repoPath branch rev = do
   localHash <- hashForRev repoPath rev
   remote <- remoteHashForRev repoPath branch rev
@@ -104,14 +96,14 @@ needsUpdate repoPath branch rev = do
 
 -- | Get the SHA1 of a revision.
 hashForRev :: (HasCallStack, MonadError GitError m, MonadIO m) => FilePath -> RevSpec -> m Hash
-hashForRev repoPath rev = Text.strip . fst <$> runGitInRepo repoPath ["rev-list", "-n1", rev]
+hashForRev repoPath (RevSpec rev) = Hash . Text.strip . fst <$> runGitInRepo repoPath ["rev-list", "-n1", rev]
 
 
 -- | Get the SHA1 of a revision spec remotely.
-remoteHashForRev :: (HasCallStack, MonadError GitError m, MonadIO m) => FilePath -> GitBranch -> RevSpec -> m Hash
-remoteHashForRev repoPath branch rev = do
+remoteHashForRev :: (HasCallStack, MonadError GitError m, MonadIO m) => FilePath -> Branch -> RevSpec -> m Hash
+remoteHashForRev repoPath (Branch branch) (RevSpec rev) = do
   (out, _) <- runGitInRepo repoPath ["ls-remote", "-q", "origin", ref]
-  pure . Text.strip . fst . Text.breakOn "\t" $ out
+  pure . Hash . Text.strip . fst . Text.breakOn "\t" $ out
   where
     ref = case rev of
             "HEAD" -> "refs/heads/" <> branch
@@ -152,7 +144,6 @@ gitCommand repoPath args = (proc "git" (map toS args)) { cwd = repoPath }
 -- of the old path.
 swapSymlink :: HasCallStack => FilePath -> FilePath -> IO (Maybe FilePath)
 swapSymlink linkPath newPath = do
-  -- TODO: Catch errors, don't bork if ENOENT
   currentPath <- getSymlink linkPath
   let base = takeDirectory linkPath
   -- TODO: 'makeRelative' will never return paths with '..', in a noble
@@ -173,8 +164,8 @@ getSymlink path = do
   pure $ hush result
 
 
-addWorkTree :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> FilePath -> GitBranch -> m ()
-addWorkTree repoPath workTreePath branch = do
+addWorkTree :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> FilePath -> Branch -> m ()
+addWorkTree repoPath workTreePath (Branch branch) = do
   -- TODO: figure out scheme for paths for concrete working trees
   void $ runGitInRepo repoPath ["worktree", "add", toS workTreePath, "origin/" <> branch]
   -- XXX: See comment in swapSymlink
@@ -184,5 +175,5 @@ addWorkTree repoPath workTreePath branch = do
 
 
 resetWorkTree :: (HasCallStack, MonadIO m, MonadError GitError m) => FilePath -> Hash -> m ()
-resetWorkTree workTreePath hash =
+resetWorkTree workTreePath (Hash hash) =
   void $ runGitInRepo workTreePath ["reset", "--hard", hash]
