@@ -22,18 +22,23 @@ library:
   dependencies:
     - aeson
     - bytestring
+    - directory
     - exceptions
+    - filepath
     - http-media
     - http-types
     - logging-effect
     - mtl
     - neat-interpolation
     - optparse-applicative
+    - process
     - prometheus-client
     - prometheus-metrics-ghc
     - servant
     - servant-server
+    - text
     - time
+    - unix
     - wai
     - wai-extra
     - wai-middleware-prometheus

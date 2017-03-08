@@ -75,12 +75,14 @@ options = info (helper <*> parser) description
            [ long "ghc-metrics"
            , help "Export GHC metrics. Requires running with +RTS."
            ])
+
     invalidLogLevel = "Log level must be one of: " <> allLogLevels
     allLogLevels = fold . List.intersperse "," . map Log.toKeyword $ enumFrom minBound
     parseAccessLogs "none" = pure Disabled
     parseAccessLogs "basic" = pure Enabled
     parseAccessLogs "dev" = pure DevMode
     parseAccessLogs _ = throwError "One of 'none', 'basic', or 'dev'"
+
     description =
       fold
         [ fullDesc
