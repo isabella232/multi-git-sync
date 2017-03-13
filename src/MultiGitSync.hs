@@ -31,6 +31,7 @@ import MultiGitSync.API (api, server)
 import MultiGitSync.Server.Instrument
        (defaultPrometheusSettings, prometheus, requestDuration)
 import qualified MultiGitSync.Server.Logging as Log
+import MultiGitSync.Sync (syncFromConfigFile)
 
 
 -- | Configuration for the application.
@@ -39,6 +40,7 @@ data Config = Config
   , accessLogs :: AccessLogs
   , logLevel :: Severity
   , enableGhcMetrics :: Bool
+  , configFile :: FilePath
   } deriving (Show)
 
 -- | What level of access logs to show.
@@ -50,7 +52,9 @@ data AccessLogs
 
 -- | Run the service.
 startApp :: IO ()
-startApp = runApp =<< execParser options
+startApp = do
+  opts <- execParser options
+  withAsync (syncFromConfigFile (configFile opts)) $ \_ -> runApp opts
 
 options :: ParserInfo Config
 options = info (helper <*> parser) description
@@ -74,6 +78,11 @@ options = info (helper <*> parser) description
         (fold
            [ long "ghc-metrics"
            , help "Export GHC metrics. Requires running with +RTS."
+           ]) <*>
+      option auto
+        (fold
+           [ long "config-file"
+           , help "Path to YAML file describing Git repositories to sync."
            ])
 
     invalidLogLevel = "Log level must be one of: " <> allLogLevels

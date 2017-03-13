@@ -21,10 +21,13 @@ library:
   source-dirs: src
   dependencies:
     - aeson
+    - async
     - bytestring
+    - containers
     - directory
     - exceptions
     - filepath
+    - fsnotify
     - http-media
     - http-types
     - logging-effect
@@ -36,6 +39,7 @@ library:
     - prometheus-metrics-ghc
     - servant
     - servant-server
+    - stm
     - text
     - time
     - unix
@@ -44,6 +48,7 @@ library:
     - wai-middleware-prometheus
     - warp
     - wl-pprint-text
+    - yaml
 
 executables:
   multi-git-sync:

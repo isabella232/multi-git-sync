@@ -1,12 +1,19 @@
 {-# OPTIONS_GHC -fno-warn-redundant-constraints #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 module MultiGitSync.Git
-  ( syncRepo
+  ( GitUrl(..)
+  , Branch(..)
+  , RevSpec(..)
+  , GitError(..)
+  , syncRepo
   ) where
 
 import Protolude
 
 import qualified Data.Text as Text
+import Data.Yaml (FromJSON)
 import Numeric.Natural (Natural)
 import System.Directory (removeDirectoryRecursive)
 import System.FilePath ((</>), makeRelative, takeDirectory)
@@ -20,17 +27,17 @@ import System.Posix.Files
 import System.Process (CmdSpec(..), CreateProcess(..), proc, readCreateProcessWithExitCode, showCommandForUser)
 
 -- | The URL to a Git repository.
-newtype GitUrl = GitUrl Text deriving (Eq, Ord, Show)
+newtype GitUrl = GitUrl Text deriving (Eq, Ord, Show, Generic, FromJSON)
 
 -- | A Git branch.
-newtype Branch = Branch Text deriving (Eq, Ord, Show)
+newtype Branch = Branch Text deriving (Eq, Ord, Show, Generic, FromJSON)
 
 -- | A revision. Can be specified in innumerable ways, e.g. 'HEAD', 'ab2c3a',
 -- 'HEAD^', etc.
-newtype RevSpec = RevSpec Text
+newtype RevSpec = RevSpec Text deriving (Eq, Ord, Show, Generic, FromJSON)
 
 -- | A SHA-1 hash for a Git revision.
-newtype Hash = Hash Text deriving (Eq, Ord, Show)
+newtype Hash = Hash Text deriving (Eq, Ord, Show, Generic, FromJSON)
 
 -- XXX: Not sure this is a good idea. Maybe use exceptions all the way
 -- through?
@@ -40,8 +47,19 @@ data GitError
   = GitProcessError Text Int Text Text (Maybe FilePath)
   deriving (Eq, Show)
 
-
-syncRepo :: HasCallStack => GitUrl -> Branch -> RevSpec -> Maybe Natural -> FilePath -> FilePath -> ExceptT GitError IO ()
+-- | Sync a repository.
+--
+-- If the repository does not exist locally, it will be cloned from the URL.
+-- If it does, it will be updated.
+syncRepo
+  :: HasCallStack
+  => GitUrl -- ^ URL of Git repository to synchronize
+  -> Branch -- ^ Branch of the Git repository to check out
+  -> RevSpec -- ^ Revision spec (e.g. HEAD) to update to
+  -> Maybe Natural -- ^ The depth of the clone. If 'Nothing', do a full clone.
+  -> FilePath -- ^ Where to store the bare Git repository
+  -> FilePath -- ^ Where to create the work tree
+  -> ExceptT GitError IO ()
 syncRepo url branch rev depth repoPath workingTreePath = do
   changed <- ensureRepo
   for_ changed $ \hash@(Hash hashText) -> do
