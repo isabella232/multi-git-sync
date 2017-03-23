@@ -9,13 +9,35 @@ import Protolude
 
 import Control.Concurrent.STM (TVar, readTVar, newTVar, writeTVar)
 import qualified Data.Map as Map
+import Data.String (String)
+import Data.Time.Clock (diffUTCTime, getCurrentTime)
 import Data.Yaml (FromJSON, ParseException, decodeFileEither)
 import Numeric.Natural (Natural)
 import System.Directory (canonicalizePath)
 import System.FilePath ((</>), takeDirectory)
 import System.FSNotify (Event(..), StopListening, WatchManager, eventPath, watchDir, withManager)
 
+import qualified Prometheus as Prom
+
 import MultiGitSync.Git
+
+data Metrics = Metrics { configFileChanges :: Prom.Metric (Prom.Vector String Prom.Counter)
+                       , numWorkers :: Prom.Metric Prom.Gauge
+                       , gitSyncSeconds :: Prom.Metric (Prom.Vector String Prom.Summary)
+                       , gitSyncCount :: Prom.Metric (Prom.Vector String Prom.Counter)
+                       }
+
+success, failure :: String
+success = "success"
+failure = "failure"
+
+
+initMetrics :: IO Metrics
+initMetrics = Metrics
+  <$> Prom.registerIO (Prom.vector ("status" :: String) (Prom.counter (Prom.Info "multigitsync_config_file_changes_total" "Number of config file changes detected")))
+  <*> Prom.registerIO (Prom.gauge (Prom.Info "multigitsync_workers" "Number of active workers"))
+  <*> Prom.registerIO (Prom.vector ("status" :: String) (Prom.summary (Prom.Info "multigitsync_git_sync_seconds" "Time to sync a git repo") Prom.defaultQuantiles))
+  <*> Prom.registerIO (Prom.vector ("status" :: String) (Prom.counter (Prom.Info "multigitsync_git_sync_seconds_count" "Number of Git repos synced")))
 
 -- XXX: What I really want is Go-style Durations.
 type Seconds = Int
@@ -54,21 +76,23 @@ data GitSync
 -- perhaps go for a priority queue & scheduler approach?
 
 syncFromConfigFile :: FilePath -> IO ()
-syncFromConfigFile configFile =
+syncFromConfigFile configFile = do
+  metrics <- initMetrics
   withManager $ \mgr -> do
-    configs <- atomically $ newTVar Map.empty
-    _stopWatching <- watchFile mgr configFile (configFileChanged configs)
-    updateConfigs configs
+    configs <- liftIO $ atomically $ newTVar Map.empty
+    _stopWatching <- watchFile mgr configFile (configFileChanged metrics configs)
+    updateConfigs metrics configs
 
 
-updateConfigs :: TVar (Map FilePath GitSync) -> IO ()
-updateConfigs configState = do
-  configs <- atomically (readTVar configState)
+updateConfigs :: Metrics -> TVar (Map FilePath GitSync) -> IO ()
+updateConfigs metrics configState = do
+  configs <- liftIO $ atomically (readTVar configState)
   workers <- startWorkers configs
   loop configs workers
   where
     loop cfgs wrkrs = do
-      newCfgs <- atomically $ blockUntil (/= cfgs) configState
+      Prom.incGauge (numWorkers metrics)
+      newCfgs <- liftIO $ atomically $ blockUntil (/= cfgs) configState
       stopWorkers wrkrs
       newWorkers <- startWorkers cfgs
       loop newCfgs newWorkers
@@ -79,38 +103,53 @@ updateConfigs configState = do
         then pure val
         else retry
 
-    startWorkers = traverse (async . syncRepoLoop)
-    stopWorkers = traverse_ cancel
+    startWorkers = traverse (liftIO . async . syncRepoLoop metrics)
+    stopWorkers = traverse_ (liftIO . cancel)
 
 -- | Keep a repository in sync.
 --
 -- TODO: This should have logic for catching exceptions during sync and
 -- retrying, enforcing a backoff & max retries policy.
-syncRepoLoop :: GitSync -> IO ()
-syncRepoLoop sync@GitSync{..} = do
+syncRepoLoop :: Metrics -> GitSync -> IO ()
+syncRepoLoop metrics sync@GitSync{..} = do
   -- XXX: Not sure ExceptT is pulling its weight here
 
   -- XXX: I think we want to mask async exceptions here? We really don't want
   -- the thread to stop partway through a sync. Probably a better thing to do
   -- is make sure that syncRepo itself is safe for async exceptions.
-  result <- runExceptT $ syncRepo url branch revSpec depth repoPath workingTreePath
+  (result, duration) <- timeAction $ runExceptT $ syncRepo url branch revSpec depth repoPath workingTreePath
   case result of
-    Left _ -> notImplemented -- XXX: Do something better with errors
+    Left _ -> recordResult failure duration
     Right _ -> do
-      threadDelay (1000000 * interval)
-      syncRepoLoop sync
+      recordResult success duration
+      liftIO $ threadDelay (1000000 * interval)
+      syncRepoLoop metrics sync
+
+
+  where
+    timeAction action = do
+      start <- getCurrentTime
+      result <- action
+      end <- getCurrentTime
+      let duration = fromRational $ toRational (end `diffUTCTime` start)
+      pure (result, duration)
+
+    recordResult status duration = do
+      Prom.withLabel status (Prom.observe duration) (gitSyncSeconds metrics)
+      Prom.withLabel status Prom.incCounter (gitSyncCount metrics)
 
 
 -- | Called when the config file changed.
-configFileChanged :: TVar (Map FilePath GitSync) -> Event -> IO ()
-configFileChanged _ (Removed _ _) = pass
-configFileChanged configState event = do
-  result <- readConfig (eventPath event)
+configFileChanged :: Metrics -> TVar (Map FilePath GitSync) -> Event -> IO ()
+configFileChanged _ _ (Removed _ _) = pass
+configFileChanged metrics configState event = do
+  result <- readConfig metrics (eventPath event)
   case result of
-    Left _ -> pass -- XXX: Should probably warn, bump a metric, etc.
+    Left _ -> Prom.withLabel failure Prom.incCounter (configFileChanges metrics)
     Right cfg -> do
       let newCfg = transformConfig cfg
-      atomically $ writeTVar configState newCfg
+      liftIO $ atomically $ writeTVar configState newCfg
+      Prom.withLabel success Prom.incCounter (configFileChanges metrics)
 
 
 -- | The 'SyncConfig' data type is optimized for humans reading & writing
@@ -142,5 +181,5 @@ watchFile mgr filePath action = do
 
 
 -- | Read the configuration file from disk.
-readConfig :: FilePath -> IO (Either ParseException SyncConfig)
-readConfig = decodeFileEither
+readConfig :: Metrics -> FilePath -> IO (Either ParseException SyncConfig)
+readConfig _ = liftIO . decodeFileEither
