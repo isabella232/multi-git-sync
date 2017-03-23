@@ -12,8 +12,7 @@ module MultiGitSync
 
 import Protolude
 
-import Control.Monad.Log (Severity(..))
-import qualified Data.List as List
+import Control.Logging (LogLevel(..), log', warn', setLogLevel, setLogTimeFormat, withStdoutLogging)
 import GHC.Stats (getGCStatsEnabled)
 import Network.Wai.Handler.Warp
        (Port, Settings, defaultSettings, runSettings, setBeforeMainLoop,
@@ -25,7 +24,6 @@ import Options.Applicative
 import qualified Prometheus as Prom
 import qualified Prometheus.Metric.GHC as Prom
 import Servant (serve)
-import Text.PrettyPrint.Leijen.Text (int, text)
 
 import MultiGitSync.API (api, server)
 import MultiGitSync.Server.Instrument
@@ -34,15 +32,11 @@ import qualified MultiGitSync.Server.Logging as Log
 import MultiGitSync.Sync (GitSync, newGitSync, runGitSync)
 
 
--- TODO: Switch to a less elaborate logging system
-
--- TODO: Serve information about current configuration
-
 -- | Configuration for the application.
 data Config = Config
   { port :: Port
   , accessLogs :: AccessLogs
-  , logLevel :: Severity
+  , logLevel :: LogLevel
   , enableGhcMetrics :: Bool
   , configFile :: FilePath
   } deriving (Show)
@@ -58,8 +52,11 @@ data AccessLogs
 startApp :: IO ()
 startApp = do
   opts <- execParser options
-  syncer <- atomically $ newGitSync (configFile opts)
-  withAsync (runGitSync syncer) $ \_ -> runApp syncer opts
+  setLogTimeFormat "%Y-%m-%d %H:%M:%S.%q"
+  setLogLevel (logLevel opts)
+  withStdoutLogging $ do
+    syncer <- atomically $ newGitSync (configFile opts)
+    withAsync (runGitSync syncer) $ \_ -> runApp syncer opts
 
 options :: ParserInfo Config
 options = info (helper <*> parser) description
@@ -72,12 +69,11 @@ options = info (helper <*> parser) description
         (fold
            [long "access-logs", help "How to log HTTP access", value Disabled]) <*>
       option
-        (eitherReader
-           (maybe (throwError (toS invalidLogLevel)) pure . Log.fromKeyword . toS))
+        (eitherReader (pure . Log.fromKeyword . toS))
         (fold
            [ long "log-level"
            , help "Minimum severity for log messages"
-           , value Informational
+           , value LevelInfo
            ]) <*>
       switch
         (fold
@@ -90,8 +86,6 @@ options = info (helper <*> parser) description
            , help "Path to YAML file describing Git repositories to sync."
            ])
 
-    invalidLogLevel = "Log level must be one of: " <> allLogLevels
-    allLogLevels = fold . List.intersperse "," . map Log.toKeyword $ enumFrom minBound
     parseAccessLogs "none" = pure Disabled
     parseAccessLogs "basic" = pure Enabled
     parseAccessLogs "dev" = pure DevMode
@@ -105,36 +99,29 @@ options = info (helper <*> parser) description
         ]
 
 runApp :: GitSync -> Config -> IO ()
-runApp syncer config@Config {..} = do
+runApp syncer config@Config{..} = do
   requests <- Prom.registerIO requestDuration
   when enableGhcMetrics $
     do statsEnabled <- getGCStatsEnabled
        unless statsEnabled $
-         Log.withLogging logLevel $
-         Log.log
-           Warning
-           (text
-              "Exporting GHC metrics but GC stats not enabled. Re-run with +RTS -T.")
+         warn' "Exporting GHC metrics but GC stats not enabled. Re-run with +RTS -T."
        void $ Prom.register Prom.ghcMetrics
   runSettings settings (middleware requests)
   where
     settings = warpSettings config
-    middleware r =
-      logging . prometheus defaultPrometheusSettings r "multi_git_sync" $ app
+    middleware r = logging . prometheus defaultPrometheusSettings r "multi_git_sync" $ app
     logging =
       case accessLogs of
         Disabled -> identity
         Enabled -> RL.logStdout
         DevMode -> RL.logStdoutDev
-    app = serve api (server logLevel syncer)
+    app = serve api (server syncer)
 
 -- | Generate warp settings from config
 --
 -- Serve from a port and print out where we're serving from.
 warpSettings :: Config -> Settings
 warpSettings Config {..} =
-  setBeforeMainLoop
-    (Log.withLogging logLevel printPort)
-    (setPort port defaultSettings)
+  setBeforeMainLoop printPort (setPort port defaultSettings)
   where
-    printPort = Log.log Informational (text "Listening on :" `mappend` int port)
+    printPort = log' ("Listening on :" <> show port)

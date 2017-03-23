@@ -30,10 +30,9 @@ library:
     - fsnotify
     - http-media
     - http-types
-    - logging-effect
+    - logging
     - lucid
     - mtl
-    - neat-interpolation
     - optparse-applicative
     - process
     - prometheus-client
@@ -48,7 +47,6 @@ library:
     - wai-extra
     - wai-middleware-prometheus
     - warp
-    - wl-pprint-text
     - yaml
 
 executables:

@@ -14,6 +14,7 @@ module MultiGitSync.Sync
 import Protolude
 
 import Control.Concurrent.STM (TVar, readTVar, newTVar, writeTVar)
+import qualified Control.Logging as Log
 import qualified Data.Map as Map
 import Data.String (String)
 import Data.Time.Clock (diffUTCTime, getCurrentTime)
@@ -96,6 +97,7 @@ newGitSync configFile = GitSync configFile <$> newTVar Map.empty
 runGitSync :: MonadIO m => GitSync -> m ()
 runGitSync sync@GitSync{..} = do
   metrics <- liftIO initMetrics
+  Log.log' $ "Running git synchronizer based on " <> toS configFile
   liftIO $ withManager $ \mgr -> do
     _stopWatching <- watchFile mgr configFile (configFileChanged metrics sync)
     updateConfigs metrics sync
@@ -118,8 +120,10 @@ updateConfigs metrics GitSync{..} = do
     loop cfgs wrkrs = do
       Prom.setGauge (fromIntegral (length wrkrs)) (numWorkers metrics)
       newCfgs <- liftIO $ atomically $ blockUntil (/= cfgs) configState
+      Log.log' "Config changed. Restarting workers."
       stopWorkers wrkrs
-      newWorkers <- liftIO $ startWorkers cfgs
+      newWorkers <- liftIO $ startWorkers newCfgs
+      Log.debug' $ "Workers restarted: " <> show (length newWorkers)
       loop newCfgs newWorkers
 
     blockUntil p var = do
@@ -142,10 +146,14 @@ syncRepoLoop metrics sync@GitRepo{..} = do
   -- XXX: I think we want to mask async exceptions here? We really don't want
   -- the thread to stop partway through a sync. Probably a better thing to do
   -- is make sure that syncRepo itself is safe for async exceptions.
+  Log.debug' $ "Syncing repo: " <> show sync
   (result, duration) <- timeAction $ runExceptT $ syncRepo url branch revSpec depth repoPath workingTreePath
   case result of
-    Left _ -> recordResult failure duration
+    Left err -> do
+      recordResult failure duration
+      Log.warn' $ "Failed to sync repo at " <> show url <> ": " <> show err
     Right _ -> do
+      Log.debug' $ "Successfully synced repo: " <> show url
       recordResult success duration
       liftIO $ threadDelay (1000000 * interval)
       syncRepoLoop metrics sync
@@ -170,7 +178,9 @@ configFileChanged _ _ (Removed _ _) = pass
 configFileChanged metrics GitSync{..} event = do
   result <- readConfig metrics (eventPath event)
   case result of
-    Left _ -> Prom.withLabel failure Prom.incCounter (configFileChanges metrics)
+    Left err -> do
+      Log.warn' $ "Failed to parse config file: " <> show err
+      Prom.withLabel failure Prom.incCounter (configFileChanges metrics)
     Right cfg -> do
       let newCfg = transformConfig cfg
       liftIO $ atomically $ writeTVar configState newCfg

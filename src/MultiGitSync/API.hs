@@ -11,16 +11,13 @@ module MultiGitSync.API
 import Protolude
 
 import Control.Monad.Except (ExceptT(..))
-import Control.Monad.Log (Severity(..))
 import qualified Data.Map as Map
 import qualified Data.Text.IO as Text
 import qualified Lucid as L
 import Network.HTTP.Media ((//), (/:))
-import Servant (Server, ServantErr, (:~>)(..), enter, (:<|>)(..), (:>))
+import Servant (Server, ServantErr, (:<|>)(..), (:>))
 import Servant.API (Accept(..), Get, MimeRender(..))
-import Text.PrettyPrint.Leijen.Text (Doc)
 
-import qualified MultiGitSync.Server.Logging as Log
 import MultiGitSync.Sync (GitSync, GitRepo(..), getConfig, getConfigFile)
 
 -- | HTML content type.
@@ -85,8 +82,8 @@ instance MimeRender HTML GitSyncPage where
 
 
 -- | multi-git-sync API implementation.
-server :: Severity -> GitSync -> Server API
-server logLevel syncer = enter (toHandler logLevel) handlers
+server :: GitSync -> Server API
+server syncer = handlers
   where
     handlers = serveConfig :<|> pure RootPage
 
@@ -99,15 +96,4 @@ server logLevel syncer = enter (toHandler logLevel) handlers
       where configPath = getConfigFile syncer
 
 -- | Our custom handler type.
-type Handler = ExceptT ServantErr (Log.LogM Doc IO)
-
--- | Translate our custom monad into a Servant handler.
---
--- See http://haskell-servant.readthedocs.io/en/stable/tutorial/Server.html#using-another-monad-for-your-handlers
--- for the details.
-toHandler
-  :: Severity -> (Handler :~> ExceptT ServantErr IO)
-toHandler logLevel = Nat toHandler'
-  where
-    toHandler' :: Handler a -> ExceptT ServantErr IO a
-    toHandler' = ExceptT . Log.withLogging logLevel . runExceptT
+type Handler = ExceptT ServantErr IO
