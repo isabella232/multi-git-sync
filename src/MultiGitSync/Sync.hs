@@ -1,8 +1,14 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 module MultiGitSync.Sync
-  ( syncFromConfigFile
+  ( GitSync
+  , getConfig
+  , getConfigFile
+  , runGitSync
+  , newGitSync
+  , GitRepo(..)
   ) where
 
 import Protolude
@@ -61,8 +67,8 @@ data SyncConfig
 
 
 -- | All the information necessary to sync a repository.
-data GitSync
-  = GitSync
+data GitRepo
+  = GitRepo
     { url :: GitUrl
     , branch :: Branch
     , revSpec :: RevSpec
@@ -72,29 +78,48 @@ data GitSync
     , interval :: Seconds
     } deriving (Eq, Ord, Show)
 
+-- | A git syncing process
+data GitSync
+  = GitSync
+  { configFile :: FilePath
+  , configState :: TVar (Map FilePath GitRepo)
+  }
+
+-- | Create a new 'GitSync' process.
+newGitSync :: FilePath -> STM GitSync
+newGitSync configFile = GitSync configFile <$> newTVar Map.empty
+
 -- XXX: Current model is that we've got one thread per git repo. Could we
 -- perhaps go for a priority queue & scheduler approach?
 
-syncFromConfigFile :: FilePath -> IO ()
-syncFromConfigFile configFile = do
-  metrics <- initMetrics
-  withManager $ \mgr -> do
-    configs <- liftIO $ atomically $ newTVar Map.empty
-    _stopWatching <- watchFile mgr configFile (configFileChanged metrics configs)
-    updateConfigs metrics configs
+-- | Synchronize based on the given 'GitSync' forever.
+runGitSync :: MonadIO m => GitSync -> m ()
+runGitSync sync@GitSync{..} = do
+  metrics <- liftIO initMetrics
+  liftIO $ withManager $ \mgr -> do
+    _stopWatching <- watchFile mgr configFile (configFileChanged metrics sync)
+    updateConfigs metrics sync
+
+-- | Get the configuration file
+getConfigFile :: GitSync -> FilePath
+getConfigFile = configFile
+
+-- | Get the current configuration.
+getConfig :: GitSync -> STM (Map FilePath GitRepo)
+getConfig GitSync{..} = readTVar configState
 
 
-updateConfigs :: Metrics -> TVar (Map FilePath GitSync) -> IO ()
-updateConfigs metrics configState = do
+updateConfigs :: (Prom.MonadMonitor m, MonadIO m) => Metrics -> GitSync -> m ()
+updateConfigs metrics GitSync{..} = do
   configs <- liftIO $ atomically (readTVar configState)
-  workers <- startWorkers configs
+  workers <- liftIO $ startWorkers configs
   loop configs workers
   where
     loop cfgs wrkrs = do
-      Prom.incGauge (numWorkers metrics)
+      Prom.setGauge (fromIntegral (length wrkrs)) (numWorkers metrics)
       newCfgs <- liftIO $ atomically $ blockUntil (/= cfgs) configState
       stopWorkers wrkrs
-      newWorkers <- startWorkers cfgs
+      newWorkers <- liftIO $ startWorkers cfgs
       loop newCfgs newWorkers
 
     blockUntil p var = do
@@ -110,8 +135,8 @@ updateConfigs metrics configState = do
 --
 -- TODO: This should have logic for catching exceptions during sync and
 -- retrying, enforcing a backoff & max retries policy.
-syncRepoLoop :: Metrics -> GitSync -> IO ()
-syncRepoLoop metrics sync@GitSync{..} = do
+syncRepoLoop :: (Prom.MonadMonitor m, MonadIO m) => Metrics -> GitRepo -> m ()
+syncRepoLoop metrics sync@GitRepo{..} = do
   -- XXX: Not sure ExceptT is pulling its weight here
 
   -- XXX: I think we want to mask async exceptions here? We really don't want
@@ -128,9 +153,9 @@ syncRepoLoop metrics sync@GitSync{..} = do
 
   where
     timeAction action = do
-      start <- getCurrentTime
-      result <- action
-      end <- getCurrentTime
+      start <- liftIO getCurrentTime
+      result <- liftIO action
+      end <- liftIO getCurrentTime
       let duration = fromRational $ toRational (end `diffUTCTime` start)
       pure (result, duration)
 
@@ -140,9 +165,9 @@ syncRepoLoop metrics sync@GitSync{..} = do
 
 
 -- | Called when the config file changed.
-configFileChanged :: Metrics -> TVar (Map FilePath GitSync) -> Event -> IO ()
+configFileChanged :: (Prom.MonadMonitor m, MonadIO m) => Metrics -> GitSync -> Event -> m ()
 configFileChanged _ _ (Removed _ _) = pass
-configFileChanged metrics configState event = do
+configFileChanged metrics GitSync{..} event = do
   result <- readConfig metrics (eventPath event)
   case result of
     Left _ -> Prom.withLabel failure Prom.incCounter (configFileChanges metrics)
@@ -154,10 +179,10 @@ configFileChanged metrics configState event = do
 
 -- | The 'SyncConfig' data type is optimized for humans reading & writing
 -- configuration. We need something different for actually running the program.
-transformConfig :: SyncConfig -> Map FilePath GitSync
+transformConfig :: SyncConfig -> Map FilePath GitRepo
 transformConfig syncConfig =
   flip Map.mapWithKey (repos syncConfig) $
-  \path cfg -> GitSync { url = url (cfg :: GitConfig)
+  \path cfg -> GitRepo { url = url (cfg :: GitConfig)
                        , branch = branch (cfg :: GitConfig)
                        , revSpec = revSpec (cfg :: GitConfig)
                        , depth = depth (cfg :: GitConfig)
@@ -181,5 +206,5 @@ watchFile mgr filePath action = do
 
 
 -- | Read the configuration file from disk.
-readConfig :: Metrics -> FilePath -> IO (Either ParseException SyncConfig)
+readConfig :: MonadIO m => Metrics -> FilePath -> m (Either ParseException SyncConfig)
 readConfig _ = liftIO . decodeFileEither

@@ -31,7 +31,7 @@ import MultiGitSync.API (api, server)
 import MultiGitSync.Server.Instrument
        (defaultPrometheusSettings, prometheus, requestDuration)
 import qualified MultiGitSync.Server.Logging as Log
-import MultiGitSync.Sync (syncFromConfigFile)
+import MultiGitSync.Sync (GitSync, newGitSync, runGitSync)
 
 
 -- TODO: Switch to a less elaborate logging system
@@ -58,7 +58,8 @@ data AccessLogs
 startApp :: IO ()
 startApp = do
   opts <- execParser options
-  withAsync (syncFromConfigFile (configFile opts)) $ \_ -> runApp opts
+  syncer <- atomically $ newGitSync (configFile opts)
+  withAsync (runGitSync syncer) $ \_ -> runApp syncer opts
 
 options :: ParserInfo Config
 options = info (helper <*> parser) description
@@ -103,8 +104,8 @@ options = info (helper <*> parser) description
         , header "multi-git-sync - TODO fill this in"
         ]
 
-runApp :: Config -> IO ()
-runApp config@Config {..} = do
+runApp :: GitSync -> Config -> IO ()
+runApp syncer config@Config {..} = do
   requests <- Prom.registerIO requestDuration
   when enableGhcMetrics $
     do statsEnabled <- getGCStatsEnabled
@@ -125,7 +126,7 @@ runApp config@Config {..} = do
         Disabled -> identity
         Enabled -> RL.logStdout
         DevMode -> RL.logStdoutDev
-    app = serve api (server logLevel)
+    app = serve api (server logLevel syncer)
 
 -- | Generate warp settings from config
 --

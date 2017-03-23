@@ -31,6 +31,7 @@ library:
     - http-media
     - http-types
     - logging-effect
+    - lucid
     - mtl
     - neat-interpolation
     - optparse-applicative
