@@ -70,7 +70,7 @@ executable multi-git-sync
   hs-source-dirs:
       cmd
   default-extensions: NoImplicitPrelude OverloadedStrings RecordWildCards
-  ghc-options: -Wall -Werror
+  ghc-options: -Wall -Werror -threaded
   build-depends:
       base >= 4.9 && < 5
     , protolude

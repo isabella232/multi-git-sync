@@ -21,7 +21,7 @@ import Network.Wai.Handler.Warp
 import qualified Network.Wai.Middleware.RequestLogger as RL
 import Options.Applicative
        (ParserInfo, auto, eitherReader, execParser, fullDesc, header,
-        help, helper, info, long, metavar, option, progDesc, switch, value)
+        help, helper, info, long, metavar, option, progDesc, str, switch, value)
 import qualified Prometheus as Prom
 import qualified Prometheus.Metric.GHC as Prom
 import Servant (serve)
@@ -33,6 +33,10 @@ import MultiGitSync.Server.Instrument
 import qualified MultiGitSync.Server.Logging as Log
 import MultiGitSync.Sync (syncFromConfigFile)
 
+
+-- TODO: Switch to a less elaborate logging system
+
+-- TODO: Serve information about current configuration
 
 -- | Configuration for the application.
 data Config = Config
@@ -79,7 +83,7 @@ options = info (helper <*> parser) description
            [ long "ghc-metrics"
            , help "Export GHC metrics. Requires running with +RTS."
            ]) <*>
-      option auto
+      option str
         (fold
            [ long "config-file"
            , help "Path to YAML file describing Git repositories to sync."
