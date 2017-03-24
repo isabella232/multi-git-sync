@@ -53,8 +53,8 @@ type Seconds = Int
 data GitConfig
   = GitConfig
   { url :: GitUrl
-  , branch :: Branch
-  , revSpec :: RevSpec
+  , branch :: Maybe Branch
+  , revSpec :: Maybe RevSpec
   , depth :: Maybe Natural
   } deriving (Eq, Ord, Show, Generic, FromJSON)
 
@@ -193,8 +193,8 @@ transformConfig :: SyncConfig -> Map FilePath GitRepo
 transformConfig syncConfig =
   flip Map.mapWithKey (repos syncConfig) $
   \path cfg -> GitRepo { url = url (cfg :: GitConfig)
-                       , branch = branch (cfg :: GitConfig)
-                       , revSpec = revSpec (cfg :: GitConfig)
+                       , branch = fromMaybe master (branch (cfg :: GitConfig))
+                       , revSpec = fromMaybe head' (revSpec (cfg :: GitConfig))
                        , depth = depth (cfg :: GitConfig)
                        , repoPath = getRepoPath path
                        , workingTreePath = getWorkTreePath path
@@ -202,6 +202,9 @@ transformConfig syncConfig =
                        }
   where
     i = interval (syncConfig :: SyncConfig)
+
+    master = Branch "master"
+    head' = RevSpec "HEAD"
 
     getRepoPath path = root syncConfig </> ".repos" </> path
     getWorkTreePath path = root syncConfig </> path
