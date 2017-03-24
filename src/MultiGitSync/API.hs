@@ -78,7 +78,7 @@ instance MimeRender HTML GitSyncPage where
 
       renderRow :: (FilePath, GitRepo) -> L.Html ()
       renderRow (path, GitRepo{..}) =
-        L.tr_ (mconcat (map (L.td_ . L.toHtml) [path, show url, show revSpec, show depth, toS repoPath, toS workingTreePath, show interval]))
+        L.tr_ (mconcat (map (L.td_ . L.toHtml) [path, show url, show branch, show revSpec, show depth, toS repoPath, toS workingTreePath, show interval]))
 
 
 -- | multi-git-sync API implementation.
