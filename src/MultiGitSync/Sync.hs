@@ -137,10 +137,6 @@ updateConfigs metrics GitSync{..} = do
     stopWorkers = traverse_ (liftIO . cancel)
 
 -- | Keep a repository in sync.
---
--- TODO: This should have logic for catching exceptions during sync and
--- retrying, enforcing a backoff & max retries policy. At the moment, an
---exception will abort the loop for all time.
 syncRepoLoop :: (Prom.MonadMonitor m, MonadIO m) => Metrics -> GitRepo -> m ()
 syncRepoLoop metrics sync@GitRepo{..} = do
   -- XXX: Not sure ExceptT is pulling its weight here
@@ -157,9 +153,9 @@ syncRepoLoop metrics sync@GitRepo{..} = do
     Right _ -> do
       Log.debug' $ "Successfully synced repo: " <> show url
       recordResult success duration
-      liftIO $ threadDelay (1000000 * interval)
-      syncRepoLoop metrics sync
-
+  -- TODO: Back-off on failure with a maximum limit.
+  liftIO $ threadDelay (1000000 * interval)
+  syncRepoLoop metrics sync
 
   where
     timeAction action = do

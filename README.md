@@ -41,11 +41,20 @@ To browse to the running server.
 
 ## TODO
 
-- [ ] Retry sync on exception
-- [ ] If repo sync successfully but working tree fails, retry working tree creation
+### Service
+
 - [ ] Serve the synced repos as static web pages
 - [ ] Include last time synced in repo information
 - [ ] Include last time config change in config information
 - [ ] Serve current system time in config information
+- [ ] Exponential backoff for failed loops
+
+### Git
+
+- [ ] If repo sync successfully but working tree fails, retry working tree creation
 - [ ] Support handling URL change
+- [ ] Make sure Git commands are async exception safe
+
+### Users
+
 - [ ] Confirm the README instructions
