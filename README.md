@@ -41,11 +41,11 @@ To browse to the running server.
 
 ## TODO
 
-- [ ] Load config properly on startup (don't wait for `touch`)
+- [ ] Retry sync on exception
 - [ ] If repo sync successfully but working tree fails, retry working tree creation
-- [ ] Confirm the README instructions
 - [ ] Serve the synced repos as static web pages
 - [ ] Include last time synced in repo information
 - [ ] Include last time config change in config information
 - [ ] Serve current system time in config information
 - [ ] Support handling URL change
+- [ ] Confirm the README instructions

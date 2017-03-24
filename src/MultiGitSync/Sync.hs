@@ -98,6 +98,7 @@ runGitSync :: MonadIO m => GitSync -> m ()
 runGitSync sync@GitSync{..} = do
   metrics <- liftIO initMetrics
   Log.log' $ "Running git synchronizer based on " <> toS configFile
+  liftIO $ loadConfigFile metrics sync
   liftIO $ withManager $ \mgr -> do
     _stopWatching <- watchFile mgr configFile (configFileChanged metrics sync)
     updateConfigs metrics sync
@@ -138,7 +139,8 @@ updateConfigs metrics GitSync{..} = do
 -- | Keep a repository in sync.
 --
 -- TODO: This should have logic for catching exceptions during sync and
--- retrying, enforcing a backoff & max retries policy.
+-- retrying, enforcing a backoff & max retries policy. At the moment, an
+--exception will abort the loop for all time.
 syncRepoLoop :: (Prom.MonadMonitor m, MonadIO m) => Metrics -> GitRepo -> m ()
 syncRepoLoop metrics sync@GitRepo{..} = do
   -- XXX: Not sure ExceptT is pulling its weight here
@@ -175,8 +177,12 @@ syncRepoLoop metrics sync@GitRepo{..} = do
 -- | Called when the config file changed.
 configFileChanged :: (Prom.MonadMonitor m, MonadIO m) => Metrics -> GitSync -> Event -> m ()
 configFileChanged _ _ (Removed _ _) = pass
-configFileChanged metrics GitSync{..} event = do
-  result <- readConfig metrics (eventPath event)
+configFileChanged metrics sync _ = loadConfigFile metrics sync
+
+-- | Load the configuration file.
+loadConfigFile :: (Prom.MonadMonitor m, MonadIO m) => Metrics -> GitSync -> m ()
+loadConfigFile metrics GitSync{..} = do
+  result <- readConfig metrics configFile
   case result of
     Left err -> do
       Log.warn' $ "Failed to parse config file: " <> show err
