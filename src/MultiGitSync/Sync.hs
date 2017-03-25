@@ -15,6 +15,7 @@ import Protolude
 
 import Control.Concurrent.STM (TVar, readTVar, newTVar, writeTVar)
 import qualified Control.Logging as Log
+import Control.Monad.Random (MonadRandom(..))
 import qualified Data.Map as Map
 import Data.String (String)
 import Data.Time.Clock (diffUTCTime, getCurrentTime)
@@ -27,6 +28,7 @@ import System.FSNotify (Event(..), StopListening, WatchManager, eventPath, watch
 import qualified Prometheus as Prom
 
 import MultiGitSync.Git
+import MultiGitSync.Retry (exponentialBackoffWithFullJitter, retryWithInfiniteBackoff)
 
 data Metrics = Metrics { configFileChanges :: Prom.Metric (Prom.Vector String Prom.Counter)
                        , numWorkers :: Prom.Metric Prom.Gauge
@@ -112,7 +114,7 @@ getConfig :: GitSync -> STM (Map FilePath GitRepo)
 getConfig GitSync{..} = readTVar configState
 
 
-updateConfigs :: (Prom.MonadMonitor m, MonadIO m) => Metrics -> GitSync -> m ()
+updateConfigs :: (MonadRandom m, Prom.MonadMonitor m, MonadIO m) => Metrics -> GitSync -> m ()
 updateConfigs metrics GitSync{..} = do
   configs <- liftIO $ atomically (readTVar configState)
   workers <- liftIO $ startWorkers configs
@@ -137,27 +139,34 @@ updateConfigs metrics GitSync{..} = do
     stopWorkers = traverse_ (liftIO . cancel)
 
 -- | Keep a repository in sync.
-syncRepoLoop :: (Prom.MonadMonitor m, MonadIO m) => Metrics -> GitRepo -> m ()
+syncRepoLoop :: (Prom.MonadMonitor m, MonadIO m, MonadRandom m) => Metrics -> GitRepo -> m ()
 syncRepoLoop metrics sync@GitRepo{..} = do
   -- XXX: Not sure ExceptT is pulling its weight here
 
   -- XXX: I think we want to mask async exceptions here? We really don't want
   -- the thread to stop partway through a sync. Probably a better thing to do
   -- is make sure that syncRepo itself is safe for async exceptions.
-  Log.debug' $ "Syncing repo: " <> show sync
-  (result, duration) <- timeAction $ runExceptT $ syncRepo url branch revSpec depth repoPath workingTreePath
-  case result of
-    Left err -> do
-      recordResult failure duration
-      Log.warn' $ "Failed to sync repo at " <> show url <> ": " <> show err
-    Right _ -> do
-      Log.debug' $ "Successfully synced repo: " <> show url
-      recordResult success duration
   -- TODO: Back-off on failure with a maximum limit.
-  liftIO $ threadDelay (1000000 * interval)
+  let backoffStrategy = exponentialBackoffWithFullJitter baseInterval maxInterval
+  retryWithInfiniteBackoff backoffStrategy doSync
   syncRepoLoop metrics sync
-
   where
+    doSync = do
+      Log.debug' $ "Syncing repo: " <> show sync
+      (result, duration) <- timeAction $ runExceptT $ syncRepo url branch revSpec depth repoPath workingTreePath
+      case result of
+        Left err -> do
+          recordResult failure duration
+          Log.warn' $ "Failed to sync repo at " <> show url <> ": " <> show err <> ". Backing off"
+        Right _ -> do
+          Log.debug' $ "Successfully synced repo: " <> show url
+          recordResult success duration
+          liftIO $ threadDelay (1000000 * interval)
+      pure result
+
+    baseInterval = interval * 1000000
+    maxInterval = baseInterval * 8
+
     timeAction action = do
       start <- liftIO getCurrentTime
       result <- liftIO action
@@ -168,6 +177,8 @@ syncRepoLoop metrics sync@GitRepo{..} = do
     recordResult status duration = do
       Prom.withLabel status (Prom.observe duration) (gitSyncSeconds metrics)
       Prom.withLabel status Prom.incCounter (gitSyncCount metrics)
+
+
 
 
 -- | Called when the config file changed.
