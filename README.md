@@ -6,19 +6,44 @@ Sidecar to keep multiple git repositories in sync
 
 ## What it is
 
+Synchronises multiple git repositories to an area on local disk, based on
+configuration in a YAML file.
+
 ## Why you might want it
 
+Excellent question!
+
 ## How to use it
+
+Create a configuration YAML file like this:
+
+```yaml
+root: /var/lib/data/git-repositories
+interval: 30  # pull every 30 seconds
+repos:
+  dotfiles:
+    url: git@github.com:jml/dotfiles.git
+  emacs-configuration:
+    url: git@github.com:jml/emacs-configuration.git
+```
+
+And store it in a path like `/etc/multi-git-sync.yaml` (the exact path doesn't
+matter).
 
 ### Natively
 
 Build and install the code with `stack install` and then run with:
 
-    multi-git-sync --port 8080 +RTS -N
+    multi-git-sync --port 8080 --config-file=/etc/multi-git-sync.yaml --ghc-metrics +RTS -N -T -RTS
 
 This will start a server that you can reach at http://localhost:8080/
 
+You can browse to that server to see the status of the Git repositories that
+have been pulled.
+
 ### With Docker
+
+[untested]
 
 Create a Docker image with:
 
@@ -47,7 +72,6 @@ To browse to the running server.
 - [ ] Include last time synced in repo information
 - [ ] Include last time config change in config information
 - [ ] Serve current system time in config information
-- [ ] Exponential backoff for failed loops
 
 ### Git
 
@@ -57,4 +81,4 @@ To browse to the running server.
 
 ### Users
 
-- [ ] Confirm the README instructions
+- [ ] Confirm the README instructions for Docker
